@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# =============================================================
+# setup.sh — RID NCS 一键环境配置
+#
+# 用法：sudo ./setup.sh          # 完整安装（需要 sudo 权限）
+#       sudo ./setup.sh check   # 仅检测
+#       sudo ./setup.sh sdk     # 仅下载 SDK
+#       sudo ./setup.sh deps    # 仅安装系统依赖
+#
+# 依赖：bash, curl, git, python3, pip3, wget
+# =============================================================
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SDK_DIR="$SCRIPT_DIR/../v3.3.1"
+SDK_VERSION="v3.3.1"
+SDK_URL="https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/sdks/nrfconnect/sdk/nrfconnect-sdk-3.3.1-source.tar.gz"
+SDK_TARBALL="nrfconnect-sdk-3.3.1-source.tar.gz"
+SDK_MD5=""
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step()  { echo ""; echo -e "${GREEN}▶ $1${NC}"; }
+
+# ---- 检测 ----
+check_prereqs() {
+    local missing=0
+
+    for c in bash python3 pip3 wget; do
+        if ! command -v $c &>/dev/null; then
+            log_error "缺少: $c"
+            missing=1
+        fi
+    done
+
+    # 可选
+    command -v ninja &>/dev/null || log_warn "未安装 ninja (cmake 会降级)"
+    command -v dtc  &>/dev/null || log_warn "未安装 device-tree-compiler"
+    command -v gcc-arm-none-eabi &>/dev/null || log_warn "未安装 gcc-arm-none-eabi"
+
+    if [ $missing -ne 0 ]; then
+        log_error "请先安装缺失的命令"
+        exit 1
+    fi
+    log_info "基本依赖满足"
+}
+
+check_sdk() {
+    if [ -d "$SDK_DIR" ] && [ -f "$SDK_DIR/.west/config" ]; then
+        local version
+        version=$(cat "$SDK_DIR/nrf/VERSION" 2>/dev/null || echo "unknown")
+        log_info "SDK 已存在: $SDK_DIR (版本 $version)"
+        return 0
+    fi
+    log_warn "SDK 未安装: $SDK_DIR"
+    return 1
+}
+
+# ---- 安装系统依赖 ----
+install_deps() {
+    log_step "安装系统依赖"
+
+    if ! command -v sudo &>/dev/null; then
+        log_error "需要 sudo 权限，请以 root 运行或安装 sudo"
+        exit 1
+    fi
+
+    log_info "更新包索引..."
+    sudo apt-get update -qq
+
+    log_info "安装编译工具..."
+    sudo apt-get install -y -qq \
+        git ninja-build device-tree-compiler \
+        python3 python3-pip python3-venv \
+        cmake gperf ccache dfu-util \
+        file wget curl
+
+    log_info "安装 ARM 工具链..."
+    sudo apt-get install -y -qq gcc-arm-none-eabi
+
+    log_info "安装 Python 依赖..."
+    pip3 install --quiet \
+        west \
+        pyelftools \
+        pykwalify
+
+    log_info "系统依赖安装完成"
+}
+
+# ---- 下载 SDK ----
+download_sdk() {
+    log_step "下载 NCS SDK $SDK_VERSION"
+
+    mkdir -p "$(dirname "$SDK_DIR")"
+
+    if [ -d "$SDK_DIR" ]; then
+        log_warn "SDK 目录已存在: $SDK_DIR"
+        local size
+        size=$(du -sh "$SDK_DIR" 2>/dev/null | cut -f1)
+        log_info "SDK 大小: $size"
+        read -rp "是否覆盖? [y/N]: " confirm
+        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+            log_info "跳过 SDK 下载"
+            return 0
+        fi
+        rm -rf "$SDK_DIR"
+    fi
+
+    log_info "下载 SDK (约 4.2GB)..."
+    log_info "URL: $SDK_URL"
+    log_info "文件: $SDK_TARBALL"
+
+    if [ -f "$SDK_TARBALL" ]; then
+        log_warn "压缩包已存在，跳过下载"
+    else
+        wget -O "$SDK_TARBALL" "$SDK_URL" --show-progress
+    fi
+
+    log_info "解压 SDK (可能需要 5-10 分钟)..."
+    mkdir -p "$SDK_DIR"
+    tar -xzf "$SDK_TARBALL" -C "$SDK_DIR" --strip-components=1
+
+    log_info "配置 west 工作空间..."
+    cd "$SDK_DIR"
+    west init -l nrf 2>/dev/null || true
+
+    log_info "更新 west 模块 (下载子仓库)..."
+    west update 2>&1 || log_warn "west update 部分失败，可能网络问题"
+
+    log_info "安装 Python 依赖..."
+    pip3 install --quiet -r zephyr/scripts/requirements.txt 2>/dev/null || true
+    pip3 install --quiet -r nrf/scripts/requirements.txt 2>/dev/null || true
+
+    cd "$SCRIPT_DIR"
+    log_info "SDK $SDK_VERSION 下载完成"
+}
+
+# ---- 后置检查 ----
+post_check() {
+    log_step "后置检查"
+
+    if ! check_sdk; then
+        log_error "SDK 检查失败"
+        exit 1
+    fi
+
+    # 验证编译环境
+    local sdk="$SDK_DIR"
+    log_info "验证 Zephyr 版本..."
+    if [ -f "$sdk/zephyr/VERSION" ]; then
+        cat "$sdk/zephyr/VERSION"
+    fi
+
+    log_info "验证工具链..."
+    arm-none-eabi-gcc --version 2>&1 | head -1
+
+    log_info "验证 west..."
+    west --version 2>&1 || true
+
+    log_info ""
+    log_info "========================================"
+    log_info "  ✅ 环境就绪！"
+    log_info ""
+    log_info "  编译:   cd $SCRIPT_DIR && source env.sh && west build ..."
+    log_info "  一键:   ./build.py rid0"
+    log_info "========================================"
+    log_info ""
+}
+
+# ---- 主入口 ----
+cmd="${1:-all}"
+
+case "$cmd" in
+    check)
+        check_prereqs
+        check_sdk
+        ;;
+    deps)
+        install_deps
+        ;;
+    sdk)
+        download_sdk
+        post_check
+        ;;
+    all|"")
+        log_step "RID NCS v3.3.1 环境一键配置"
+        check_prereqs
+        if check_sdk; then
+            log_info "SDK 已就绪，跳过安装"
+            post_check
+            exit 0
+        fi
+        install_deps
+        download_sdk
+        post_check
+        ;;
+    *)
+        echo "用法: $0 [check|deps|sdk|all]"
+        exit 1
+        ;;
+esac

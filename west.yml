@@ -1,0 +1,76 @@
+# =============================================================
+# west.yml — RID NCS v3.3.1 版本锁定文件
+# =============================================================
+#
+# 本文件是 nRF Connect SDK v3.3.1 的 west manifest 快照，
+# 用于给下游开发者复现完全一致的 SDK 环境。
+#
+# 用法：
+#   mkdir -p ../ncs/
+#   cd ../ncs/
+#   west init -m <path-to-v3.3.1-apps> --mr master --mf west.yml v3.3.1
+#   cd v3.3.1
+#   west update
+#
+# 注意：完整 SDK 约 4.2GB，推荐用 setup.sh 自动下载
+#       sudo ./setup.sh
+#
+# 来源: https://github.com/nrfconnect/sdk-nrf 的 ncs-v3.3.1 分支
+# 快照时间: 2026-06-30
+
+manifest:
+  version: "0.13"
+  remotes:
+    - name: ncs
+      url-base: https://github.com/nrfconnect
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject-rtos
+  defaults:
+    remote: ncs
+
+  projects:
+    - name: zephyr
+      repo-path: sdk-zephyr
+      revision: ncs-v3.3.1
+      import:
+        name-allowlist:
+          - hal_nordic
+          - picolibc
+          - cmsis
+          - cmsis_6
+          - mbedtls
+          - mcuboot
+          - segger
+          - tinycrypt
+          - littlefs
+          - nanopb
+          - fatfs
+          - lvgl
+          - lz4
+          - zcbor
+          - zscilib
+          - mipi-sys-t
+          - liblc3
+          - nrf_hw_models
+          - nrf_wifi
+          - open-amp
+          - libmetal
+
+    - name: mcuboot
+      repo-path: sdk-mcuboot
+      revision: ncs-v3.3.1
+      path: bootloader/mcuboot
+
+    - name: nrfxlib
+      repo-path: sdk-nrfxlib
+      path: nrfxlib
+      revision: v3.3.1
+
+    - name: trusted-firmware-m
+      repo-path: sdk-trusted-firmware-m
+      path: modules/tee/tf-m/trusted-firmware-m
+      revision: ncs-v3.3.1
+
+  self:
+    path: nrf
+    west-commands: scripts/west-commands.yml

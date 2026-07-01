@@ -1,0 +1,22 @@
+# =============================================================
+# requirements.txt — RID NCS v3.3.1 Python 依赖锁定
+# =============================================================
+#
+# 本文件与 west.yml 配套使用。
+# 安装: pip3 install -r requirements.txt
+
+# West 工具（NCS 工程管理）
+west>=1.2.0
+
+# Python 依赖（NCS 编译需要）
+# Zephyr 编译系统
+cmake>=3.20.0
+
+# 分析 ELF/Hex 文件
+pyelftools>=0.29
+
+# Kconfig 验证
+pykwalify>=1.8.0
+
+# 构建系统
+ninja>=1.10.0

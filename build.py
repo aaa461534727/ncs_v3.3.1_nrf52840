@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build.py — NCS v3.3.1 统一构建脚本
+build.py — NCS v3.3.1 统一构建脚本（便携版）
 
 用法:
   ./build.py                   交互模式
@@ -19,6 +19,7 @@ build.py — NCS v3.3.1 统一构建脚本
 环境变量:
   BOARD=nrf52840dk/nrf52840    默认板型，可覆盖
   NO_SYSBUILD=1                强制不带 MCUboot
+  RID_SDK_PATH=<path>          指定 SDK 路径（默认 ../ncs/v3.3.1）
 
 产物（sysbuild 模式）:
   build/<app>/merged.hex        ← MCUboot + app 合体 hex（烧写这个）
@@ -36,12 +37,32 @@ import subprocess
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-SDK_DIR = Path("/home/dengbaowen/linux/rid/ncs/v3.3.1")
+
+# ---- SDK 路径检测（不硬编码！） ----
+RID_SDK_PATH = os.environ.get("RID_SDK_PATH")
+if RID_SDK_PATH:
+    SDK_DIR = Path(RID_SDK_PATH).resolve()
+else:
+    SDK_DIR = (SCRIPT_DIR / "../v3.3.1").resolve()
+
+if not SDK_DIR.exists():
+    print(f"\033[31m[ERROR]\033[0m NCS SDK 未找到！")
+    print(f"  期望路径: {SDK_DIR}")
+    print(f"  请执行:   sudo ./setup.sh")
+    print(f"  或设置:   export RID_SDK_PATH=/your/sdk/path")
+    sys.exit(1)
+
+if not (SDK_DIR / ".west" / "config").exists():
+    print(f"\033[31m[ERROR]\033[0m {SDK_DIR} 不是有效的 NCS SDK（缺少 .west/config）")
+    print(f"  请执行:   sudo ./setup.sh")
+    sys.exit(1)
+
+# ---- 其他路径 ----
 APPS_DIR = SCRIPT_DIR / "apps"
 BUILD_DIR = SCRIPT_DIR / "build"
 BOARD = os.environ.get("BOARD", "nrf52840dk/nrf52840")
 
-# 环境变量 — west build 也从子进程继承
+# 环境变量
 os.environ["ZEPHYR_BASE"] = str(SDK_DIR / "zephyr")
 os.environ["ZEPHYR_TOOLCHAIN_VARIANT"] = "gnuarmemb"
 os.environ["GNUARMEMB_TOOLCHAIN_PATH"] = "/usr"
@@ -107,7 +128,7 @@ def do_build(name, app_dir):
 
     if use_sysbuild:
         print(f"\033[36m[INFO]\033[0m 模式: sysbuild (MCUboot + {name})")
-        # west build --sysbuild 需要从 SDK 的 zephyr 目录跑（west workspace 检测）
+        print(f"\033[36m[INFO]\033[0m SDK: {SDK_DIR}")
         r = run_cmd(
             ["west", "build", "--sysbuild",
              "-b", BOARD,
@@ -187,7 +208,6 @@ def do_flash(name, merged=False):
             print(f"\033[32m[OK]\033[0m 烧写完成: {name}")
         else:
             print(f"\033[31m[ERROR]\033[0m 烧写失败")
-
 
 
 def do_clean(name):

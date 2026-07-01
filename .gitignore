@@ -1,10 +1,23 @@
+# 编译产物
 build/
 *.o
 *.obj
 *.a
 *.d
+
+# Python
 *.pyc
 __pycache__/
+
+# 编辑器
 .DS_Store
 *.swp
 *.swo
+
+# SDK（放在仓库外面，不算提交）
+../v3.3.1/
+*.tar.gz
+
+# 备份
+*.bak
+*.bak.*
