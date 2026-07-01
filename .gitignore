@@ -1,0 +1,10 @@
+build/
+*.o
+*.obj
+*.a
+*.d
+*.pyc
+__pycache__/
+.DS_Store
+*.swp
+*.swo
