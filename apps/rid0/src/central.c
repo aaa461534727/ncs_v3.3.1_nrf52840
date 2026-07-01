@@ -59,10 +59,18 @@ static int find_rid_service_data(struct net_buf_simple *ad)
             break; /* 无效数据 */
         }
 
-        /* Service Data - 16-bit UUID (0x16) 或 32-bit UUID */
+        /* Service Data - 16-bit UUID (0x16) */
         if (field_type == 0x16 && i + 3 < len) {
             uint16_t uuid = data[i + 2] | (data[i + 3] << 8);
             if (uuid == 0xFFFA) {
+                return i;
+            }
+        }
+
+        /* Manufacturer Specific Data (0xFF) - 新国标用 0x06 或 0xFFFA 作为公司ID */
+        if (field_type == 0xFF && i + 3 < len) {
+            uint16_t company_id = data[i + 2] | (data[i + 3] << 8);
+            if (company_id == 0x0006 || company_id == 0xFFFA) {
                 return i;
             }
         }
@@ -146,7 +154,14 @@ static int try_parse_extended_rid(struct net_buf_simple *ad, const bt_addr_le_t 
         svc_data_len = 30; // 限制到我们的 buffer
     }
 
-    rid_info->msg_type = ad->data[svc_data_start + 1] >> 4; // 参考旧国标 header byte
+    // 对于 Manufacturer Data (0xFF)，从 company ID 之后开始取数据
+    uint8_t svc_data_start_actual = svc_data_start;
+    if (ad->data[svc_data_idx + 1] == 0xFF) {
+        // Manufacturer Specific Data: [len][0xFF][company_lo][company_hi][data...]
+        // company ID 是 2 字节，数据从 idx+4 开始
+        svc_data_start_actual = svc_data_start;
+    }
+    rid_info->msg_type = ad->data[svc_data_start_actual + 1] >> 4;
     memcpy(rid_info->mac, addr->a.val, sizeof(addr->a.val));
 
     // 重构 buf: [0xAA, 0xBB, mac(6), rid_data..., 0xCC, 0xDD]
@@ -193,13 +208,26 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type, st
         return;
     }
 
-    // 3. 打印所有带 0xFFFA Service UUID 的广告包用于调试
+    // 3. Debug: 打印收到的所有广播包（前 5 个，用于分析数据格式）
     {
-        int idx = find_rid_service_data(ad);
-        if (idx >= 0) {
-            printk("[RID-DEBUG]: %s, RSSI %i, type %u, adv %s\n",
-                   dev, rssi, type,
+        static int pkt_count = 0;
+        if (pkt_count < 10) {
+            printk("[AD-PKT]: %s, RSSI %i, type %u, len %u, data %s\n",
+                   dev, rssi, type, ad->len,
                    Util_convertHex2Str(ad->data, ad->len));
+            pkt_count++;
+            
+            // 同时也把解析后的 AD structure 打出来
+            uint8_t i = 0;
+            while (i < ad->len - 1) {
+                uint8_t flen = ad->data[i];
+                uint8_t ftype = ad->data[i+1];
+                if (flen == 0) break;
+                uint8_t data_start = i + 2;
+                uint8_t data_len = flen - 1;
+                printk("  [AD-STRUCT]: type 0x%02x, len %u\n", ftype, data_len);
+                i += flen + 1;
+            }
         }
     }
 }
@@ -273,6 +301,8 @@ int central_scan_adv(void)
 
     printk("Scanning successfully started\n");
     printk("ota test 5\n");
+    /* 强制刷新 RTT buffer */
+    printk("SCAN_ACTIVE_MARKER\n");
     return 0;
 }
 
