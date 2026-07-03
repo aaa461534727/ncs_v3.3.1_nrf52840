@@ -412,7 +412,17 @@ do_setup() {
         fi
     }
 
-    echo "SDK: $SDK_DIR"
+    echo "SDK 检测:"
+    if [ -n "${RID_SDK_PATH:-}" ]; then
+        echo "  来源: RID_SDK_PATH 环境变量"
+        echo "  路径: $SDK_DIR"
+    elif [ -d "${SCRIPT_DIR}/../v3.3.1/.west" ]; then
+        echo "  来源: 自动检测 (../v3.3.1 与 v3.3.1-apps 同级)"
+        echo "  路径: $SDK_DIR"
+    elif [ -d "${HOME}/linux/rid/ncs/v3.3.1/.west" ]; then
+        echo "  来源: 默认路径"
+        echo "  路径: $SDK_DIR"
+    fi
     if [ -d "$SDK_DIR/.west" ]; then
         echo "  ✅ SDK 就绪"
     else
