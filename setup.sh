@@ -68,11 +68,7 @@ check_sdk() {
 install_deps() {
     log_step "安装系统依赖"
 
-    if ! command -v sudo &>/dev/null; then
-        log_error "需要 sudo 权限，请以 root 运行或安装 sudo"
-        exit 1
-    fi
-
+    # 系统包用 sudo，SDK 下载不用 sudo
     log_info "更新包索引..."
     sudo apt-get update -qq 2>&1 || log_warn "apt update 有警告，继续..."
 
@@ -89,8 +85,8 @@ install_deps() {
         log_info "去 https://developer.arm.com/downloads/-/gnu-rm 下载工具链"
     }
 
-    log_info "安装 Python 依赖..."
-    pip3 install \
+    log_info "安装 Python 依赖 (当前用户)..."
+    pip3 install --user \
         west \
         pyelftools \
         pykwalify 2>&1 || log_warn "pip 安装部分包失败"
@@ -126,16 +122,19 @@ download_sdk() {
 
     cd "$SDK_DIR"
 
-    # 修复文件所有权 (sudo 运行导致 root 所有者)
-    if [ "$(stat -c %U "$SDK_DIR/zephyr")" != "$(whoami)" ]; then
-        log_info "修复文件所有权..."
-        sudo chown -R "$(whoami):$(whoami)" "$SDK_DIR" 2>/dev/null || true
+    # 如果被 root 运行过，修复所有权（检测第一个子仓库的 owner）
+    if [ "$(stat -c %U "$SDK_DIR/zephyr" 2>/dev/null)" != "$(whoami)" ]; then
+        log_info "修复文件所有权 (root → $(whoami))..."
+        if command -v sudo &>/dev/null; then
+            sudo chown -R "$(whoami):$(whoami)" "$SDK_DIR" 2>/dev/null || true
+        fi
     fi
 
-    # git safe.directory (避免 dubious ownership 错误)
-    git config --global --add safe.directory "$SDK_DIR/zephyr" 2>/dev/null || true
-    git config --global --add safe.directory "$SDK_DIR/nrf" 2>/dev/null || true
-    git config --global --add safe.directory "$SDK_DIR/bootloader/mcuboot" 2>/dev/null || true
+    # git safe.directory — 处理所有 west 子仓库（避免 dubious ownership）
+    log_info "配置 git safe.directory..."
+    while IFS= read -r gitdir; do
+        git config --global --add safe.directory "$(dirname "$gitdir")" 2>/dev/null || true
+    done < <(find "$SDK_DIR" -name ".git" -type d 2>/dev/null)
 
     # 设置 ZEPHYR_BASE (west 扩展命令需要)
     west config --global zephyr.base "$SDK_DIR/zephyr" 2>/dev/null || true
@@ -205,6 +204,13 @@ case "$cmd" in
         ;;
     all|"")
         log_step "RID NCS v3.3.1 环境一键配置"
+
+        # 检测是否需要 sudo
+        if command -v sudo &>/dev/null && ! sudo -n true 2>/dev/null; then
+            log_info "需要 sudo 密码安装系统依赖（只需一次）"
+            sudo -v || log_warn "无法获取 sudo 权限，跳过系统包安装"
+        fi
+
         check_prereqs
         if check_sdk; then
             log_info "SDK 已就绪，跳过安装"
