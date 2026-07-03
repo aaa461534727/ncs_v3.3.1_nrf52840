@@ -143,11 +143,14 @@ download_sdk() {
         log_info "重试: cd $SDK_DIR && west update"
     }
 
-    log_info "安装 Zephyr Python 依赖..."
-    pip3 install --no-deps -r zephyr/scripts/requirements-base.txt 2>/dev/null || true
-    pip3 install -r zephyr/scripts/requirements.txt 2>&1 | tail -5 || log_warn "部分 pip 包安装失败"
-    pip3 install -r nrf/scripts/requirements.txt 2>/dev/null || true
-    pip3 install -r bootloader/mcuboot/scripts/requirements.txt 2>/dev/null || true
+    log_info "安装 Zephyr Python 依赖 (核心包 + 其余 west 按需安装)..."
+    # 只装必须的核心依赖，跳过后台 pip install 完整 requirements.txt
+    # （完整 requirements.txt 会因为 100+ 包依赖回溯卡 30+ 分钟）
+    pip3 install --user 2>/dev/null \
+        west cmake pyelftools pyyaml pykwalify packaging \
+        intelhex canopen progress psutil pyserial \
+        anytree colorama requests jsonschema jinja2 2>&1 | tail -3 || true
+    log_info "核心依赖完成（编译时 west 会自动安装其余包）"
 
     cd "$SCRIPT_DIR"
     log_info "SDK 安装完成: $SDK_DIR"
