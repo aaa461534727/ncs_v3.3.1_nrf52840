@@ -32,25 +32,14 @@ log_step()  { echo ""; echo -e "${GREEN}▶ $1${NC}"; }
 
 # ---- 检测 ----
 check_prereqs() {
-    local missing=0
-
-    for c in bash python3 pip3 wget; do
+    # 只检查最基础的（装了才能装其他的）
+    for c in bash apt-get; do
         if ! command -v $c &>/dev/null; then
-            log_error "缺少: $c"
-            missing=1
+            log_error "缺少: $c (无法继续)"
+            exit 1
         fi
     done
-
-    # 可选
-    command -v ninja &>/dev/null || log_warn "未安装 ninja (cmake 会降级)"
-    command -v dtc  &>/dev/null || log_warn "未安装 device-tree-compiler"
-    command -v gcc-arm-none-eabi &>/dev/null || log_warn "未安装 gcc-arm-none-eabi"
-
-    if [ $missing -ne 0 ]; then
-        log_error "请先安装缺失的命令"
-        exit 1
-    fi
-    log_info "基本依赖满足"
+    log_info "基础依赖满足"
 }
 
 check_sdk() {
