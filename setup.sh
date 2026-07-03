@@ -126,6 +126,20 @@ download_sdk() {
 
     cd "$SDK_DIR"
 
+    # 修复文件所有权 (sudo 运行导致 root 所有者)
+    if [ "$(stat -c %U "$SDK_DIR/zephyr")" != "$(whoami)" ]; then
+        log_info "修复文件所有权..."
+        sudo chown -R "$(whoami):$(whoami)" "$SDK_DIR" 2>/dev/null || true
+    fi
+
+    # git safe.directory (避免 dubious ownership 错误)
+    git config --global --add safe.directory "$SDK_DIR/zephyr" 2>/dev/null || true
+    git config --global --add safe.directory "$SDK_DIR/nrf" 2>/dev/null || true
+    git config --global --add safe.directory "$SDK_DIR/bootloader/mcuboot" 2>/dev/null || true
+
+    # 设置 ZEPHYR_BASE (west 扩展命令需要)
+    west config --global zephyr.base "$SDK_DIR/zephyr" 2>/dev/null || true
+
     log_info "west update (下载所有子仓库)..."
     west update 2>&1 || {
         log_warn "west update 部分失败，可能是网络问题"
