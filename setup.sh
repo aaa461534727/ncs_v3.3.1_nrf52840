@@ -75,10 +75,16 @@ install_deps() {
     }
 
     log_info "安装 Python 依赖 (当前用户)..."
+    # 不用 sudo，装到当前用户的 ~/.local
     pip3 install --user \
         west \
         pyelftools \
         pykwalify 2>&1 || log_warn "pip 安装部分包失败"
+
+    # 确保 ~/.local/bin 在 PATH 里
+    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
 
     log_info "系统依赖安装完成"
 }
@@ -86,6 +92,9 @@ install_deps() {
 # ---- 下载 SDK ----
 download_sdk() {
     log_step "安装 NCS SDK $SDK_VERSION"
+
+    # 确保 ~/.local/bin 在 PATH
+    export PATH="$HOME/.local/bin:$PATH"
 
     local sdk_parent
     sdk_parent="$(dirname "$SDK_DIR")"
@@ -193,12 +202,6 @@ case "$cmd" in
         ;;
     all|"")
         log_step "RID NCS v3.3.1 环境一键配置"
-
-        # 检测是否需要 sudo
-        if command -v sudo &>/dev/null && ! sudo -n true 2>/dev/null; then
-            log_info "需要 sudo 密码安装系统依赖（只需一次）"
-            sudo -v || log_warn "无法获取 sudo 权限，跳过系统包安装"
-        fi
 
         check_prereqs
         if check_sdk; then
