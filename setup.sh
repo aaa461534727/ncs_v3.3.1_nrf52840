@@ -19,9 +19,6 @@ SDK_DIR="$SCRIPT_DIR/../v3.3.1"
 # 支持 RID_SDK_PATH 覆盖
 [ -n "${RID_SDK_PATH:-}" ] && SDK_DIR="$RID_SDK_PATH"
 SDK_VERSION="v3.3.1"
-SDK_URL="https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/sdks/nrfconnect/sdk/nrfconnect-sdk-3.3.1-source.tar.gz"
-SDK_TARBALL="nrfconnect-sdk-3.3.1-source.tar.gz"
-SDK_MD5=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -103,50 +100,46 @@ install_deps() {
 
 # ---- 下载 SDK ----
 download_sdk() {
-    log_step "下载 NCS SDK $SDK_VERSION"
+    log_step "安装 NCS SDK $SDK_VERSION"
 
-    mkdir -p "$(dirname "$SDK_DIR")"
+    local sdk_parent
+    sdk_parent="$(dirname "$SDK_DIR")"
+    mkdir -p "$sdk_parent"
 
-    if [ -d "$SDK_DIR" ]; then
-        log_warn "SDK 目录已存在: $SDK_DIR"
-        local size
-        size=$(du -sh "$SDK_DIR" 2>/dev/null | cut -f1)
-        log_info "SDK 大小: $size"
-        read -rp "是否覆盖? [y/N]: " confirm
-        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-            log_info "跳过 SDK 下载"
-            return 0
-        fi
-        rm -rf "$SDK_DIR"
+    if [ -d "$SDK_DIR/.west" ]; then
+        log_info "SDK 已存在: $SDK_DIR"
+        return 0
     fi
 
-    log_info "下载 SDK (约 4.2GB)..."
-    log_info "URL: $SDK_URL"
-    log_info "文件: $SDK_TARBALL"
+    # 用 west.yml 拉取 SDK（git clone + west update）
+    log_info "通过 west 初始化 SDK (从 west.yml)..."
+    log_info "目标: $SDK_DIR"
+    log_info "这需要 git 访问 GitHub/ Nordic，约 4.2GB，可能需要 20-40 分钟"
 
-    if [ -f "$SDK_TARBALL" ]; then
-        log_warn "压缩包已存在，跳过下载"
-    else
-        wget -O "$SDK_TARBALL" "$SDK_URL" --show-progress
-    fi
+    cd "$sdk_parent"
 
-    log_info "解压 SDK (可能需要 5-10 分钟)..."
-    mkdir -p "$SDK_DIR"
-    tar -xzf "$SDK_TARBALL" -C "$SDK_DIR" --strip-components=1
+    # west init 以 v3.3.1-apps 的 west.yml 为 manifest
+    west init -m "$SCRIPT_DIR" --mr master --mf west.yml "$SDK_DIR" 2>&1 || {
+        log_error "west init 失败，请检查网络和 git"
+        log_error "手动安装: cd $sdk_parent && git clone https://github.com/nrfconnect/sdk-nrf --branch v3.3.1"
+        exit 1
+    }
 
-    log_info "配置 west 工作空间..."
     cd "$SDK_DIR"
-    west init -l nrf 2>/dev/null || true
 
-    log_info "更新 west 模块 (下载子仓库)..."
-    west update 2>&1 || log_warn "west update 部分失败，可能网络问题"
+    log_info "west update (下载所有子仓库)..."
+    west update 2>&1 || {
+        log_warn "west update 部分失败，可能是网络问题"
+        log_info "重试: cd $SDK_DIR && west update"
+    }
 
-    log_info "安装 Python 依赖..."
+    log_info "安装 Zephyr Python 依赖..."
     pip3 install --quiet -r zephyr/scripts/requirements.txt 2>/dev/null || true
     pip3 install --quiet -r nrf/scripts/requirements.txt 2>/dev/null || true
+    pip3 install --quiet -r bootloader/mcuboot/scripts/requirements.txt 2>/dev/null || true
 
     cd "$SCRIPT_DIR"
-    log_info "SDK $SDK_VERSION 下载完成"
+    log_info "SDK 安装完成: $SDK_DIR"
 }
 
 # ---- 后置检查 ----
