@@ -10,10 +10,14 @@
 # 依赖：bash, curl, git, python3, pip3, wget
 # =============================================================
 
-set -e
+set -euo pipefail
+# 某些命令允许失败（apt update 网络问题等）
+APT_ERR_OK=1
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDK_DIR="$SCRIPT_DIR/../v3.3.1"
+# 支持 RID_SDK_PATH 覆盖
+[ -n "${RID_SDK_PATH:-}" ] && SDK_DIR="$RID_SDK_PATH"
 SDK_VERSION="v3.3.1"
 SDK_URL="https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/sdks/nrfconnect/sdk/nrfconnect-sdk-3.3.1-source.tar.gz"
 SDK_TARBALL="nrfconnect-sdk-3.3.1-source.tar.gz"
@@ -73,23 +77,26 @@ install_deps() {
     fi
 
     log_info "更新包索引..."
-    sudo apt-get update -qq
+    sudo apt-get update -qq 2>&1 || log_warn "apt update 有警告，继续..."
 
     log_info "安装编译工具..."
     sudo apt-get install -y -qq \
         git ninja-build device-tree-compiler \
         python3 python3-pip python3-venv \
         cmake gperf ccache dfu-util \
-        file wget curl
+        file wget curl 2>&1 || log_warn "部分包安装失败，继续..."
 
     log_info "安装 ARM 工具链..."
-    sudo apt-get install -y -qq gcc-arm-none-eabi
+    sudo apt-get install -y -qq gcc-arm-none-eabi 2>&1 || {
+        log_warn "apt 装 gcc-arm-none-eabi 失败，尝试手动下载..."
+        log_info "去 https://developer.arm.com/downloads/-/gnu-rm 下载工具链"
+    }
 
     log_info "安装 Python 依赖..."
     pip3 install --quiet \
         west \
         pyelftools \
-        pykwalify
+        pykwalify 2>&1 || log_warn "pip 安装部分包失败"
 
     log_info "系统依赖安装完成"
 }
