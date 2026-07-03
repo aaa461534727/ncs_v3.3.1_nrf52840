@@ -149,7 +149,7 @@ download_sdk() {
     pip3 install --user 2>/dev/null \
         west cmake pyelftools pyyaml pykwalify packaging \
         intelhex canopen progress psutil pyserial \
-        anytree colorama requests jsonschema jinja2 2>&1 | tail -3 || true
+        anytree colorama requests jsonschema attrs cbor jinja2 2>&1 | tail -3 || true
     log_info "核心依赖完成（编译时 west 会自动安装其余包）"
 
     cd "$SCRIPT_DIR"
