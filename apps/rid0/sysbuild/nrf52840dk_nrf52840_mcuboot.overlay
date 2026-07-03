@@ -1,0 +1,7 @@
+/* MCUboot 串口恢复 — uart1 引脚 P1.04(RX)/P1.02(TX) */
+
+&uart1 {
+	status = "okay";
+	compatible = "nordic,nrf-uarte";
+	current-speed = <115200>;
+};

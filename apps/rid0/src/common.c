@@ -48,11 +48,12 @@ char *Util_convertBdAddr2Str(uint8_t *pAddr)
  *
  * @return  Hex as a string
  */
+#define MAX_AD_DATA_LEN 255
 char *Util_convertHex2Str(uint8_t *Hex, uint16_t Len)
 {
   uint8_t     charCnt;
   char        hex[] = "0123456789ABCDEF";
-  static char str[(2*31)+3];    // 广播数据最大31字节
+  static char str[(2*MAX_AD_DATA_LEN)+4];    // 广播数据
   char        *pStr = str;
 
   *pStr++ = '0';

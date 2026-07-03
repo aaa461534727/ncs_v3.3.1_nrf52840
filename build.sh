@@ -10,7 +10,10 @@
 #   ./build.sh <app> flash  编译+烧写
 #   ./build.sh <app> clean  清理
 #
-# 添加新应用: ./build.sh new myapp
+# Patch 机制：
+#   apps/<app>/patches/ 下的 .patch 文件会在 cmake 前自动 apply 到 SDK
+#   用 ./build.sh <app> patch-status 查看当前已应用的 patch
+#   用 ./build.sh <app> patch-revert 回退所有 patch
 #=============================================================================
 
 set -euo pipefail
@@ -41,8 +44,106 @@ find_app() {
     return 1
 }
 
+# =============================================================================
+# Patch 管理
+# =============================================================================
+PATCH_DIR_VAR_NAME="PATCHES_APPLIED_${BOARD//\//_}"
+
+do_patch_list() {
+    local dir="$1"
+    local pdir="${dir}/patches"
+    if [ ! -d "$pdir" ] || [ -z "$(ls "$pdir"/*.patch 2>/dev/null)" ]; then
+        info "无 patch (${pdir}/)"
+        return 0
+    fi
+    echo "Patches (${pdir}/):"
+    for p in "$pdir"/*.patch; do
+        echo "  $(basename "$p")"
+    done
+}
+
+do_patch_apply() {
+    local name="$1" dir="$2"
+    local pdir="${dir}/patches"
+
+    if [ ! -d "$pdir" ] || [ -z "$(ls "$pdir"/*.patch 2>/dev/null)" ]; then
+        return 0  # 无 patch 不是错
+    fi
+
+    # 检查是否已 apply (标记文件在 build 目录下)
+    local applied_flag="${SCRIPT_DIR}/build/${name}/.patches_applied"
+    if [ -f "$applied_flag" ]; then
+        info "patch 已应用，跳过"
+        return 0
+    fi
+
+    info "应用 patch 到 SDK (${SDK_DIR})..."
+    local errors=0
+    for p in "$pdir"/*.patch; do
+        local pname=$(basename "$p")
+        echo "  → ${pname}"
+        if patch -p0 -d "${SDK_DIR}" -N -r /dev/null < "$p" 2>&1; then
+            ok "    ${pname}"
+        else
+            local rc=$?
+            # patch -N 返回 1 = 已经打过 (跳过), 不是错误
+            if [ $rc -eq 1 ]; then
+                info "    ${pname} (已打过了, 跳过)"
+            else
+                die "patch ${pname} 失败! (exit=$rc), 请检查 SDK 是否干净"
+            fi
+        fi
+    done
+
+    mkdir -p "$(dirname "$applied_flag")"
+    touch "$applied_flag"
+    ok "patch 应用完成"
+}
+
+do_patch_revert() {
+    local name="$1" dir="$2"
+    local pdir="${dir}/patches"
+
+    if [ ! -d "$pdir" ] || [ -z "$(ls "$pdir"/*.patch 2>/dev/null)" ]; then
+        info "无 patch 可回退"
+        return 0
+    fi
+
+    local applied_flag="${SCRIPT_DIR}/build/${name}/.patches_applied"
+    if [ ! -f "$applied_flag" ]; then
+        info "patch 未应用，无需回退"
+        return 0
+    fi
+
+    info "回退 patch (SDK: ${SDK_DIR})..."
+    # 倒序回退
+    for p in $(ls -r "$pdir"/*.patch); do
+        local pname=$(basename "$p")
+        echo "  ← ${pname}"
+        if patch -p0 -d "${SDK_DIR}" -R -r /dev/null < "$p" 2>&1; then
+            ok "    ${pname}"
+        else
+            warn "    回退 ${pname} 失败 (可能已被覆盖), 继续..."
+        fi
+    done
+    rm -f "$applied_flag"
+    ok "patch 回退完成"
+}
+
+do_patch_status() {
+    local name="$1" dir="$2"
+    local applied_flag="${SCRIPT_DIR}/build/${name}/.patches_applied"
+    if [ -f "$applied_flag" ]; then
+        ok "Patches: 已应用"
+    else
+        info "Patches: 未应用"
+    fi
+    do_patch_list "$dir"
+}
+
 do_cmake() {
-    local name="$1" dir="$2" bdir="${SCRIPT_DIR}/build/${name}"
+    local name="$1" dir="$2" bdir
+    bdir="${SCRIPT_DIR}/build/${name}"
     mkdir -p "$bdir"
     cd "$bdir"
     local overlay=""
@@ -53,7 +154,9 @@ do_cmake() {
 }
 
 do_build() {
-    local name="$1" dir="$2" bdir="${SCRIPT_DIR}/build/${name}"
+    local name="$1" dir="$2" bdir
+    bdir="${SCRIPT_DIR}/build/${name}"
+    do_patch_apply "$name" "$dir"
     [ -f "${bdir}/CMakeCache.txt" ] || do_cmake "$name" "$dir"
     cd "$bdir" && ninja
     ok "编译成功: $name"
@@ -63,18 +166,23 @@ do_build() {
 }
 
 do_flash() {
-    local name="$1" bdir="${SCRIPT_DIR}/build/${name}"
+    local name="$1" bdir
+    bdir="${SCRIPT_DIR}/build/${name}"
     [ -f "${bdir}/CMakeCache.txt" ] || die "先编译: ./build.sh $name"
     cd "$bdir" && west flash --runner jlink
     ok "烧写: $name"
 }
 
 do_clean() {
+    local name="$1" dir="$2"
+    do_patch_revert "$name" "$dir"
     rm -rf "${SCRIPT_DIR}/build/$1" && ok "清理: $1"
 }
 
 do_menuconfig() {
-    local name="$1" dir="$2" bdir="${SCRIPT_DIR}/build/${name}"
+    local name="$1" dir="$2" bdir
+    bdir="${SCRIPT_DIR}/build/${name}"
+    do_patch_apply "$name" "$dir"
     [ -f "${bdir}/CMakeCache.txt" ] || do_cmake "$name" "$dir"
     cd "$bdir" && west build -t menuconfig
 }
@@ -82,7 +190,35 @@ do_menuconfig() {
 do_new() {
     local name="$1" dir="${SCRIPT_DIR}/apps/${name}"
     [ -d "$dir" ] && die "已存在: $name"
-    mkdir -p "$dir/src" "$dir/boards"
+    mkdir -p "$dir/src" "$dir/boards" "$dir/patches"
+    # patches README
+    cat > "$dir/patches/README.md" <<'PATCHMD'
+# SDK Patches
+
+补丁文件放在这里，命名规则: `NNNN-简短描述.patch`
+
+例如: `0001-uart-mcumgr-debug-log.patch`
+
+## 创建补丁
+
+```bash
+cd /home/dengbaowen/linux/rid/ncs/v3.3.1
+git diff > /home/dengbaowen/linux/rid/ncs/v3.3.1-apps/apps/rid0/patches/0001-xxx.patch
+```
+
+如果在非 git 管理的 SDK 上修改了文件：
+
+```bash
+cd /home/dengbaowen/linux/rid/ncs/v3.3.1
+diff -ruN . ~/ncs-orig-backup/ > patches/0001-xxx.patch
+```
+
+## 注意事项
+
+- patch 文件路径相对于 SDK 根目录 (`ncs/v3.3.1/`)
+- 按编号排序 apply，倒序 revert
+- `build.sh` 会自动在 cmake 前 apply，clean 时 revert
+PATCHMD
     cat > "$dir/CMakeLists.txt" <<CMAKE
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
@@ -114,6 +250,9 @@ new <name>        创建新应用
 <app>             编译
 <app> flash       编译+烧写
 <app> clean       清理
+<app> patches     列出 patch
+<app> patch-status 查看 patch 状态
+<app> patch-revert 回退所有 patch
 
 应用目录: apps/<name>/
 HELP
@@ -137,7 +276,7 @@ main() {
             case "$c" in
                 1) do_build "$app" "$(find_app "$app")" ;;
                 2) do_build "$app" "$(find_app "$app")" && do_flash "$app" ;;
-                3) do_clean "$app" ;;
+                3) do_clean "$app" "$(find_app "$app")" ;;
             esac
             ;;
         list) list_apps ;;
@@ -149,8 +288,11 @@ main() {
             case "${1:-build}" in
                 build|"")     do_build "$app" "$dir" ;;
                 flash)        do_build "$app" "$dir" && do_flash "$app" ;;
-                clean)        do_clean "$app" ;;
+                clean)        do_clean "$app" "$dir" ;;
                 menuconfig)   do_menuconfig "$app" "$dir" ;;
+                patches)      do_patch_list "$dir" ;;
+                patch-status) do_patch_status "$app" "$dir" ;;
+                patch-revert) do_patch_revert "$app" "$dir" ;;
                 *)            die "未知: $1" ;;
             esac
             ;;

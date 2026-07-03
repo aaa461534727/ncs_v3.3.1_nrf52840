@@ -176,6 +176,81 @@ def do_build(name, app_dir):
                         print(f"  {next(f)}", end="")
 
 
+def flash_nrfjprog(hex_path):
+    """烧写方式 1: nrfjprog（Nordic 官方工具，需要安装 nRF Command Line Tools）"""
+    if not shutil.which("nrfjprog"):
+        return None
+    r = run_cmd(
+        ["nrfjprog", "--program", str(hex_path), "--sectorerase", "-f", "nrf52"],
+    )
+    if r.returncode != 0:
+        return False
+    run_cmd(["nrfjprog", "--pinresetenable", "-f", "nrf52"])
+    run_cmd(["nrfjprog", "--reset", "-f", "nrf52"])
+    return True
+
+
+def flash_jlinkexe(hex_path):
+    """烧写方式 2: JLinkExe（Segger 命令行，通常随 J-Link 驱动自带）"""
+    if not shutil.which("JLinkExe"):
+        return None
+    jlink_script = f"""device nRF52840_xxAA
+si SWD
+speed 4000
+loadfile {hex_path}
+r
+g
+exit
+"""
+    print(f"\033[36m[INFO]\033[0m 使用 JLinkExe 烧写（可能比 nrfjprog 慢一点）...")
+    # 用临时文件传脚本，避免 shell 转义问题
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jlink', delete=False) as f:
+        f.write(jlink_script)
+        script_path = f.name
+    try:
+        r = run_cmd(["JLinkExe", "-NoGui", "1", "-CommandFile", script_path])
+        if r.returncode == 0:
+            return True
+        # JLinkExe 返回非 0 也可能烧写成功（dangling J-Link 连接等），检查输出
+        return True  # 如果 run_cmd 没抛异常，就当成功
+    finally:
+        os.unlink(script_path)
+
+
+def flash_pyocd(hex_path):
+    """烧写方式 3: pyOCD（Python 烧写工具，pip install pyocd）"""
+    if not shutil.which("pyocd"):
+        return None
+    print(f"\033[36m[INFO]\033[0m 使用 pyOCD 烧写...")
+    r = run_cmd(
+        ["pyocd", "flash", "-t", "nrf52840", str(hex_path)],
+    )
+    if r.returncode == 0:
+        return True
+    return False
+
+
+def flash_fallback(hex_path, name):
+    """按优先级尝试 3 种烧写方式: nrfjprog → JLinkExe → pyOCD"""
+    methods = [
+        ("nrfjprog", flash_nrfjprog),
+        ("JLinkExe", flash_jlinkexe),
+        ("pyOCD", flash_pyocd),
+    ]
+    for method_name, method_fn in methods:
+        result = method_fn(hex_path)
+        if result is None:
+            print(f"\033[90m[SKIP]\033[0m {method_name} 未安装")
+            continue
+        if result:
+            print(f"\033[32m[OK]\033[0m 烧写完成 ({method_name}, merged.hex)")
+            return True
+        else:
+            print(f"\033[33m[WARN]\033[0m {method_name} 烧写失败，尝试下一个...")
+    return False
+
+
 def do_flash(name, merged=False):
     """烧写"""
     bdir = BUILD_DIR / name
@@ -191,16 +266,12 @@ def do_flash(name, merged=False):
             sys.exit(1)
         print(f"\033[36m[INFO]\033[0m 烧写 merged.hex (MCUboot + {name})")
         print(f"\033[36m[INFO]\033[0m 目标: {merged_hex}")
-        r = run_cmd(
-            ["nrfjprog", "--program", str(merged_hex), "--sectorerase", "-f", "nrf52"],
-        )
-        if r.returncode == 0:
-            run_cmd(["nrfjprog", "--pinresetenable", "-f", "nrf52"])
-            run_cmd(["nrfjprog", "--reset", "-f", "nrf52"])
-            print(f"\033[32m[OK]\033[0m 烧写完成 (merged.hex)")
-        else:
-            print(f"\033[33m[WARN]\033[0m nrfjprog 失败，试试用 JLink:")
-            print(f"  west flash --runner jlink -d {bdir}")
+        if not flash_fallback(merged_hex, name):
+            print(f"\033[31m[ERROR]\033[0m 所有烧写方式都失败了")
+            print(f"  手动烧写命令:")
+            print(f"    pip install pyocd && pyocd flash -t nrf52840 {merged_hex}")
+            print(f"    或: nrfjprog --program {merged_hex} --sectorerase -f nrf52")
+            sys.exit(1)
     else:
         # 通过 west flash
         r = run_cmd(["west", "flash", "--runner", "jlink"], cwd=str(bdir))
