@@ -168,8 +168,8 @@ post_check() {
     log_info "========================================"
     log_info "  ✅ 环境就绪！"
     log_info ""
-    log_info "  编译:   cd $SCRIPT_DIR && source env.sh && west build ..."
-    log_info "  一键:   ./build.py rid0"
+    log_info "  编译:   cd $SCRIPT_DIR && ./build.sh"
+    log_info "  检查:   ./build.sh setup"
     log_info "========================================"
     log_info ""
 }
