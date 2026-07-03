@@ -33,21 +33,20 @@ else
 fi
 
 if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR/.west" ]; then
-    cat >&2 <<'SETUP'
+    cat >&2 <<SETUP
 ╔══════════════════════════════════════════════════════╗
 ║  SDK 未找到！                                       ║
 ║                                                      ║
-║  下载并解压 NCS v3.3.1:                              ║
-║    cd ~/linux/rid                                     ║
-║    wget https://.../ncs-v3.3.1.tar.gz                 ║
-║    tar -xzf ncs-v3.3.1.tar.gz                         ║
+║  自动下载+安装（推荐）:                               ║
+║    sudo ./setup.sh                                    ║
 ║                                                      ║
-║  或者设置环境变量:                                    ║
+║  或者手动指定路径:                                    ║
 ║    export RID_SDK_PATH=/your/ncs/v3.3.1/path          ║
+║    ./build.sh setup.sh                                ║
 ║                                                      ║
-║  默认路径:                                            ║
-║    ${SCRIPT_DIR}/../v3.3.1     (与 v3.3.1-apps 同级) ║
-║    ~/linux/rid/ncs/v3.3.1      (主人默认路径)          ║
+║  SDK 期望位置 (自动检测):                             ║
+║    ../v3.3.1             (与 v3.3.1-apps 同级目录)   ║
+║    ~/linux/rid/ncs/v3.3.1 (默认路径)                  ║
 ╚══════════════════════════════════════════════════════╝
 SETUP
     exit 1
@@ -413,22 +412,38 @@ do_setup() {
     }
 
     echo "SDK 检测:"
+    if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR/.west" ]; then
+        echo "  ❌ SDK 未找到"
+        echo ""
+        echo "  SDK 期望位置:"
+        echo "    ../v3.3.1             (与 v3.3.1-apps 同级)"
+        echo "    ~/linux/rid/ncs/v3.3.1 (默认路径)"
+        echo "    或 export RID_SDK_PATH=/自定义路径"
+        echo ""
+        if [ -f "${SCRIPT_DIR}/setup.sh" ]; then
+            echo "  一键安装: sudo ${SCRIPT_DIR}/setup.sh"
+            echo ""
+            read -r -p "  是否现在运行 setup.sh 安装? [Y/n]: " answer
+            if [ "$answer" != "n" ] && [ "$answer" != "N" ]; then
+                cd "$SCRIPT_DIR" && sudo ./setup.sh
+                exec "$0" "${@}"  # 重新加载
+            fi
+        else
+            echo "  下载 SDK:"
+            echo "    https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-SDK/Download"
+        fi
+        return 1
+    fi
+
     if [ -n "${RID_SDK_PATH:-}" ]; then
         echo "  来源: RID_SDK_PATH 环境变量"
-        echo "  路径: $SDK_DIR"
     elif [ -d "${SCRIPT_DIR}/../v3.3.1/.west" ]; then
         echo "  来源: 自动检测 (../v3.3.1 与 v3.3.1-apps 同级)"
-        echo "  路径: $SDK_DIR"
     elif [ -d "${HOME}/linux/rid/ncs/v3.3.1/.west" ]; then
         echo "  来源: 默认路径"
-        echo "  路径: $SDK_DIR"
     fi
-    if [ -d "$SDK_DIR/.west" ]; then
-        echo "  ✅ SDK 就绪"
-    else
-        echo "  ❌ SDK 无效 (缺少 .west/)"
-        ok=1
-    fi
+    echo "  路径: $SDK_DIR"
+    echo "  ✅ SDK 就绪"
 
     echo ""
     echo "编译工具:"
@@ -448,7 +463,7 @@ do_setup() {
     elif command -v pyocd &>/dev/null; then
         echo "  ✅ pyOCD"
     else
-        echo "  ❌ 没有任何烧写工具! 请安装 nrf-command-line-tools 或 pip install pyocd"
+        echo "  ❌ 无烧写工具! 安装: sudo apt install jlink 或 pip install pyocd"
         ok=1
     fi
 
