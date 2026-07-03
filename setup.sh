@@ -81,7 +81,7 @@ install_deps() {
         git ninja-build device-tree-compiler \
         python3 python3-pip python3-venv \
         cmake gperf ccache dfu-util \
-        file wget curl 2>&1 || log_warn "部分包安装失败，继续..."
+        file wget curl fzf 2>&1 || log_warn "部分包安装失败，继续..."
 
     log_info "安装 ARM 工具链..."
     sudo apt-get install -y -qq gcc-arm-none-eabi 2>&1 || {
@@ -90,7 +90,7 @@ install_deps() {
     }
 
     log_info "安装 Python 依赖..."
-    pip3 install --quiet \
+    pip3 install \
         west \
         pyelftools \
         pykwalify 2>&1 || log_warn "pip 安装部分包失败"
@@ -134,9 +134,9 @@ download_sdk() {
     }
 
     log_info "安装 Zephyr Python 依赖..."
-    pip3 install --quiet -r zephyr/scripts/requirements.txt 2>/dev/null || true
-    pip3 install --quiet -r nrf/scripts/requirements.txt 2>/dev/null || true
-    pip3 install --quiet -r bootloader/mcuboot/scripts/requirements.txt 2>/dev/null || true
+    pip3 install -r zephyr/scripts/requirements.txt 2>&1 || log_warn "部分 pip 包安装失败"
+    pip3 install -r nrf/scripts/requirements.txt 2>/dev/null || true
+    pip3 install -r bootloader/mcuboot/scripts/requirements.txt 2>/dev/null || true
 
     cd "$SCRIPT_DIR"
     log_info "SDK 安装完成: $SDK_DIR"
