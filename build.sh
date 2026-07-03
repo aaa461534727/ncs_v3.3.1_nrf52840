@@ -263,6 +263,7 @@ do_build() {
     if [ "$use_sysbuild" = "1" ]; then
         info "模式: sysbuild (MCUboot + $name)"
         info "SDK: $SDK_DIR"
+        export ZEPHYR_BASE="${SDK_DIR}/zephyr"
         cd "${SDK_DIR}/zephyr"
         west build --sysbuild -b "$BOARD" "$dir" -d "$bdir" -- $overlay_opt || die "编译失败"
     else
