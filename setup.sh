@@ -111,15 +111,14 @@ download_sdk() {
         return 0
     fi
 
-    # 用 west.yml 拉取 SDK（git clone + west update）
-    log_info "通过 west 初始化 SDK (从 west.yml)..."
+    # west init 从 GitHub 拉取 nRF Connect SDK
+    log_info "通过 west 初始化 SDK..."
     log_info "目标: $SDK_DIR"
-    log_info "这需要 git 访问 GitHub/ Nordic，约 4.2GB，可能需要 20-40 分钟"
+    log_info "约 4.2GB git clone，需要 5-10 分钟"
 
     cd "$sdk_parent"
 
-    # west init 以 v3.3.1-apps 的 west.yml 为 manifest
-    west init -m "$SCRIPT_DIR" --mr master --mf west.yml "$SDK_DIR" 2>&1 || {
+    west init -m https://github.com/nrfconnect/sdk-nrf --mr v3.3.1 "$SDK_DIR" 2>&1 || {
         log_error "west init 失败，请检查网络和 git"
         log_error "手动安装: cd $sdk_parent && git clone https://github.com/nrfconnect/sdk-nrf --branch v3.3.1"
         exit 1
