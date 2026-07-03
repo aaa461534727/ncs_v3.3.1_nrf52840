@@ -18,6 +18,8 @@
 #=============================================================================
 
 set -euo pipefail
+# 确保 ~/.local/bin 在 PATH（pip --user 安装的包在这里）
+export PATH="$HOME/.local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # SDK 路径: 环境变量 > 自动检测 > 默认路径

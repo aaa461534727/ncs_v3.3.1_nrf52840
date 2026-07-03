@@ -86,6 +86,12 @@ install_deps() {
         export PATH="$HOME/.local/bin:$PATH"
     fi
 
+    # 永久写入 ~/.bashrc（下次登录自动生效）
+    if ! grep -q "HOME/.local/bin" "$HOME/.bashrc" 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+        log_info "已将 ~/.local/bin 添加到 PATH ($HOME/.bashrc)"
+    fi
+
     log_info "系统依赖安装完成"
 }
 
