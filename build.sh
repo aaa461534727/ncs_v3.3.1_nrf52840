@@ -20,7 +20,38 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SDK_DIR="/home/dengbaowen/linux/rid/ncs/v3.3.1"
+# SDK 路径: 环境变量 > 自动检测 > 默认路径
+if [ -n "${RID_SDK_PATH:-}" ]; then
+    SDK_DIR="$RID_SDK_PATH"
+elif [ -d "${SCRIPT_DIR}/../v3.3.1/.west" ]; then
+    # 自动检测: ncs/v3.3.1-apps 同级默认有 ncs/v3.3.1
+    SDK_DIR="$(cd "${SCRIPT_DIR}/../v3.3.1" && pwd)"
+elif [ -d "${HOME}/linux/rid/ncs/v3.3.1/.west" ]; then
+    SDK_DIR="${HOME}/linux/rid/ncs/v3.3.1"
+else
+    SDK_DIR=""
+fi
+
+if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR/.west" ]; then
+    cat >&2 <<'SETUP'
+╔══════════════════════════════════════════════════════╗
+║  SDK 未找到！                                       ║
+║                                                      ║
+║  下载并解压 NCS v3.3.1:                              ║
+║    cd ~/linux/rid                                     ║
+║    wget https://.../ncs-v3.3.1.tar.gz                 ║
+║    tar -xzf ncs-v3.3.1.tar.gz                         ║
+║                                                      ║
+║  或者设置环境变量:                                    ║
+║    export RID_SDK_PATH=/your/ncs/v3.3.1/path          ║
+║                                                      ║
+║  默认路径:                                            ║
+║    ${SCRIPT_DIR}/../v3.3.1     (与 v3.3.1-apps 同级) ║
+║    ~/linux/rid/ncs/v3.3.1      (主人默认路径)          ║
+╚══════════════════════════════════════════════════════╝
+SETUP
+    exit 1
+fi
 BOARD="${BOARD:-nrf52840dk/nrf52840}"
 
 export ZEPHYR_BASE="${SDK_DIR}/zephyr"
@@ -352,15 +383,71 @@ help() {
 
 list              列出应用
 new <name>        创建新应用
+setup             检查环境依赖
 <app>             编译 (sysbuild 模式, 带 MCUboot)
 <app> flash       编译+烧写 merged.hex
+<app> flash-only  仅烧写 (不编译)
 <app> clean       清理 (自动 revert patch)
 <app> patches     列出 patch
 <app> patch-status 查看 patch 状态
 <app> patch-revert 回退所有 patch
 
+SDK 路径: 默认检测 ../v3.3.1 或 ~/linux/rid/ncs/v3.3.1
+         设置: export RID_SDK_PATH=/your/path
 应用目录: apps/<name>/
 HELP
+}
+
+do_setup() {
+    echo "=== 环境检查 ==="
+    echo ""
+
+    local ok=0
+    check_cmd() {
+        if command -v "$1" &>/dev/null; then
+            echo "  ✅ $1"
+        else
+            echo "  ❌ $1 — 请安装"
+            ok=1
+        fi
+    }
+
+    echo "SDK: $SDK_DIR"
+    if [ -d "$SDK_DIR/.west" ]; then
+        echo "  ✅ SDK 就绪"
+    else
+        echo "  ❌ SDK 无效 (缺少 .west/)"
+        ok=1
+    fi
+
+    echo ""
+    echo "编译工具:"
+    check_cmd cmake
+    check_cmd ninja
+    check_cmd west
+    check_cmd arm-none-eabi-gcc
+    check_cmd python3
+    check_cmd fzf
+
+    echo ""
+    echo "烧写工具 (至少需要一个):"
+    if command -v nrfjprog &>/dev/null; then
+        echo "  ✅ nrfjprog"
+    elif command -v JLinkExe &>/dev/null; then
+        echo "  ✅ JLinkExe"
+    elif command -v pyocd &>/dev/null; then
+        echo "  ✅ pyOCD"
+    else
+        echo "  ❌ 没有任何烧写工具! 请安装 nrf-command-line-tools 或 pip install pyocd"
+        ok=1
+    fi
+
+    echo ""
+    if [ $ok -eq 0 ]; then
+        echo "✅ 环境全部就绪"
+    else
+        echo "⚠️  有缺失项，请按提示修复"
+    fi
 }
 
 main() {
@@ -368,24 +455,30 @@ main() {
         ""|interactive)
             local apps=($(list_apps))
             [ ${#apps[@]} -eq 0 ] && die "没有应用 (试试 ./build.sh new <name>)"
-            echo "应用:"; local i
-            for i in "${!apps[@]}"; do echo "  [$((i+1))] ${apps[$i]}"; done
-            echo "  [n] 新应用"
-            read -r -p "选择 (1-${#apps[@]}/n): " s
-            case "$s" in
-                n|N) read -r -p "名字: "; [ -n "$REPLY" ] && do_new "$REPLY"; exit ;;
-                *) local idx=$((s-1)); app="${apps[$idx]}" ;;
+            # fzf 菜单选择
+            local menu_opts=("${apps[@]}" "[新建应用]" "[退出]")
+            local choice
+            choice=$(printf '%s\n' "${menu_opts[@]}" | fzf --prompt="选择应用: " --height=10 --layout=reverse)
+            case "$choice" in
+                "[新建应用]")
+                    read -r -p "名字: "
+                    [ -n "$REPLY" ] && do_new "$REPLY"
+                    return ;;
+                "[退出]"|"") return ;;
+                *) app="$choice" ;;
             esac
-            echo "1)编译 2)编译+烧写 3)清理"
-            read -r -p "选择: " c
-            case "$c" in
-                1) do_build "$app" "$(find_app "$app")" ;;
-                2) do_build "$app" "$(find_app "$app")" && do_flash "$app" ;;
-                3) do_clean "$app" "$(find_app "$app")" ;;
+            local action
+            action=$(printf '编译\n仅烧写\n编译+烧写\n清理' | fzf --prompt="选择操作: " --height=10 --layout=reverse)
+            case "$action" in
+                编译)    do_build "$app" "$(find_app "$app")" ;;
+                仅烧写)  do_flash "$app" ;;
+                编译+烧写) do_build "$app" "$(find_app "$app")" && do_flash "$app" ;;
+                清理)    do_clean "$app" "$(find_app "$app")" ;;
             esac
             ;;
         list) list_apps ;;
         new)  [ $# -ge 2 ] || die "用法: ./build.sh new <name>"; do_new "$2" ;;
+        setup)        do_setup ;;
         -h|--help|help) help ;;
         *)
             local app="$1" dir; shift
@@ -393,6 +486,7 @@ main() {
             case "${1:-build}" in
                 build|"")     do_build "$app" "$dir" ;;
                 flash)        do_build "$app" "$dir" && do_flash "$app" ;;
+                flash-only)   do_flash "$app" ;;
                 clean)        do_clean "$app" "$dir" ;;
                 patches)      do_patch_list "$dir" ;;
                 patch-status) do_patch_status "$app" "$dir" ;;
