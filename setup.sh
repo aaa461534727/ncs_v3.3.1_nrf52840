@@ -133,7 +133,8 @@ download_sdk() {
     }
 
     log_info "安装 Zephyr Python 依赖..."
-    pip3 install -r zephyr/scripts/requirements.txt 2>&1 || log_warn "部分 pip 包安装失败"
+    pip3 install --no-deps -r zephyr/scripts/requirements-base.txt 2>/dev/null || true
+    pip3 install -r zephyr/scripts/requirements.txt 2>&1 | tail -5 || log_warn "部分 pip 包安装失败"
     pip3 install -r nrf/scripts/requirements.txt 2>/dev/null || true
     pip3 install -r bootloader/mcuboot/scripts/requirements.txt 2>/dev/null || true
 
