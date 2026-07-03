@@ -315,8 +315,9 @@ do_clean() {
 }
 
 do_new() {
-    local name="$1" dir="${SCRIPT_DIR}/apps/${name}"
-    [ -d "$dir" ] && die "已存在: $name"
+    local name="${1:-}" dir
+    [ -z "$name" ] && die "用法: ./build.sh new <name>"
+    dir="${SCRIPT_DIR}/apps/${name}"
     mkdir -p "$dir/src" "$dir/boards" "$dir/sysbuild" "$dir/patches"
 
     # CMakeLists.txt
@@ -486,8 +487,8 @@ main() {
             choice=$(printf '%s\n' "${menu_opts[@]}" | fzf --prompt="选择应用: " --height=10 --layout=reverse)
             case "$choice" in
                 "[新建应用]")
-                    read -r -p "名字: "
-                    [ -n "$REPLY" ] && do_new "$REPLY"
+                    read -r -p "名字: " name_input
+                    [ -n "${name_input:-}" ] && do_new "$name_input"
                     return ;;
                 "[退出]"|"") return ;;
                 *) app="$choice" ;;
