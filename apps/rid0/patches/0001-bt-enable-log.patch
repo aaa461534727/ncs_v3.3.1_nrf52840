@@ -1,0 +1,10 @@
+--- a/zephyr/subsys/bluetooth/host/hci_core.c	2026-07-02 19:11:18.630362253 -0700
++++ b/zephyr/subsys/bluetooth/host/hci_core.c	2026-07-02 19:11:18.634362292 -0700
+@@ -4704,6 +4704,7 @@
+ 
+ int bt_enable(bt_ready_cb_t cb)
+ {
++	printk(">>> [PATCH-OK] bt_enable() called - SDK patched! <<<\n");
+ 	int err;
+ 
+ 	if (IS_ENABLED(CONFIG_ZTEST) && bt_dev.hci == NULL) {

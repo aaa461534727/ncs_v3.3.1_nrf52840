@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 #=============================================================================
-# build.sh — NCS v3.3.1 统一构建脚本
+# build.sh — NCS v3.3.1 统一构建脚本（唯一构建入口）
 #
 # 用法:
 #   ./build.sh              交互模式
 #   ./build.sh list         列出应用
 #   ./build.sh new <name>   创建新应用
-#   ./build.sh <app>        编译
-#   ./build.sh <app> flash  编译+烧写
-#   ./build.sh <app> clean  清理
+#   ./build.sh <app>        编译 (sysbuild 模式, 带 MCUboot)
+#   ./build.sh <app> flash       编译+烧写 merged.hex
+#   ./build.sh <app> clean       清理
+#   ./build.sh <app> patches     列出 patch
+#   ./build.sh <app> patch-status
+#   ./build.sh <app> patch-revert
 #
 # Patch 机制：
-#   apps/<app>/patches/ 下的 .patch 文件会在 cmake 前自动 apply 到 SDK
-#   用 ./build.sh <app> patch-status 查看当前已应用的 patch
-#   用 ./build.sh <app> patch-revert 回退所有 patch
+#   apps/<app>/patches/ 下的 .patch 文件会在编译前自动 apply 到 SDK
 #=============================================================================
 
 set -euo pipefail
@@ -30,6 +31,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'
 YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 list_apps() {
@@ -47,7 +49,6 @@ find_app() {
 # =============================================================================
 # Patch 管理
 # =============================================================================
-PATCH_DIR_VAR_NAME="PATCHES_APPLIED_${BOARD//\//_}"
 
 do_patch_list() {
     local dir="$1"
@@ -67,10 +68,9 @@ do_patch_apply() {
     local pdir="${dir}/patches"
 
     if [ ! -d "$pdir" ] || [ -z "$(ls "$pdir"/*.patch 2>/dev/null)" ]; then
-        return 0  # 无 patch 不是错
+        return 0
     fi
 
-    # 检查是否已 apply (标记文件在 build 目录下)
     local applied_flag="${SCRIPT_DIR}/build/${name}/.patches_applied"
     if [ -f "$applied_flag" ]; then
         info "patch 已应用，跳过"
@@ -78,23 +78,20 @@ do_patch_apply() {
     fi
 
     info "应用 patch 到 SDK (${SDK_DIR})..."
-    local errors=0
     for p in "$pdir"/*.patch; do
         local pname=$(basename "$p")
         echo "  → ${pname}"
-        if patch -p0 -d "${SDK_DIR}" -N -r /dev/null < "$p" 2>&1; then
+        if patch --batch -p1 -d "${SDK_DIR}" -N -r /dev/null < "$p" 2>&1; then
             ok "    ${pname}"
         else
             local rc=$?
-            # patch -N 返回 1 = 已经打过 (跳过), 不是错误
             if [ $rc -eq 1 ]; then
                 info "    ${pname} (已打过了, 跳过)"
             else
-                die "patch ${pname} 失败! (exit=$rc), 请检查 SDK 是否干净"
+                die "patch ${pname} 失败! (exit=$rc)"
             fi
         fi
     done
-
     mkdir -p "$(dirname "$applied_flag")"
     touch "$applied_flag"
     ok "patch 应用完成"
@@ -105,22 +102,19 @@ do_patch_revert() {
     local pdir="${dir}/patches"
 
     if [ ! -d "$pdir" ] || [ -z "$(ls "$pdir"/*.patch 2>/dev/null)" ]; then
-        info "无 patch 可回退"
         return 0
     fi
 
     local applied_flag="${SCRIPT_DIR}/build/${name}/.patches_applied"
     if [ ! -f "$applied_flag" ]; then
-        info "patch 未应用，无需回退"
         return 0
     fi
 
     info "回退 patch (SDK: ${SDK_DIR})..."
-    # 倒序回退
     for p in $(ls -r "$pdir"/*.patch); do
         local pname=$(basename "$p")
         echo "  ← ${pname}"
-        if patch -p0 -d "${SDK_DIR}" -R -r /dev/null < "$p" 2>&1; then
+        if patch --batch -p1 -d "${SDK_DIR}" -R -r /dev/null < "$p" 2>&1; then
             ok "    ${pname}"
         else
             warn "    回退 ${pname} 失败 (可能已被覆盖), 继续..."
@@ -141,36 +135,147 @@ do_patch_status() {
     do_patch_list "$dir"
 }
 
-do_cmake() {
-    local name="$1" dir="$2" bdir
-    bdir="${SCRIPT_DIR}/build/${name}"
-    mkdir -p "$bdir"
-    cd "$bdir"
-    local overlay=""
-    local ovf="${dir}/boards/${BOARD//\//_}.overlay"
-    [ -f "$ovf" ] && overlay="-DDTC_OVERLAY_FILE=${ovf}" && info "overlay: $ovf"
-    cmake -GNinja -DBOARD="$BOARD" -DZEPHYR_BASE="$ZEPHYR_BASE" $overlay "$dir"
-    ok "配置: $name"
+# =============================================================================
+# 烧写工具检测 (fallback: nrfjprog → JLinkExe → pyOCD)
+# =============================================================================
+
+find_flash_tool() {
+    if command -v nrfjprog &>/dev/null; then echo "nrfjprog"; return 0; fi
+    if command -v JLinkExe &>/dev/null; then echo "jlink"; return 0; fi
+    if command -v pyocd &>/dev/null; then echo "pyocd"; return 0; fi
+    echo ""
+}
+
+flash_hex() {
+    local hex="$1"
+    local tool
+    tool="$(find_flash_tool)"
+    if [ -z "$tool" ]; then
+        die "没有烧写工具! 安装: pip install pyocd"
+    fi
+
+    case "$tool" in
+        nrfjprog)
+            info "使用 nrfjprog 烧写..."
+            nrfjprog --program "$hex" --sectorerase -f nrf52 || die "nrfjprog 烧写失败"
+            nrfjprog --pinresetenable -f nrf52
+            nrfjprog --reset -f nrf52
+            ;;
+        jlink)
+            info "使用 JLinkExe 烧写..."
+            local script
+            script=$(mktemp /tmp/jlink-flash.XXXXXX.jlink)
+            cat > "$script" <<JLINK
+device nRF52840_xxAA
+si SWD
+speed 4000
+loadfile $hex
+r
+g
+exit
+JLINK
+            JLinkExe -NoGui 1 -CommandFile "$script" || die "JLinkExe 烧写失败"
+            rm -f "$script"
+            ;;
+        pyocd)
+            info "使用 pyOCD 烧写..."
+            pyocd flash -t nrf52840 "$hex" || die "pyOCD 烧写失败"
+            ;;
+    esac
+    ok "烧写完成 ($tool)"
+}
+
+# =============================================================================
+# 构建 (sysbuild 模式: west build --sysbuild → MCUboot + app)
+# =============================================================================
+
+has_sysbuild() {
+    local app_dir="$1"
+    [ -f "${app_dir}/sysbuild/CMakeLists.txt" ] || [ -f "${app_dir}/sysbuild.conf" ]
 }
 
 do_build() {
-    local name="$1" dir="$2" bdir
-    bdir="${SCRIPT_DIR}/build/${name}"
+    local name="$1" dir="$2"
+    local bdir="${SCRIPT_DIR}/build/${name}"
+    local use_sysbuild
+
     do_patch_apply "$name" "$dir"
-    [ -f "${bdir}/CMakeCache.txt" ] || do_cmake "$name" "$dir"
-    cd "$bdir" && ninja
+
+    if has_sysbuild "$dir"; then
+        use_sysbuild=1
+    else
+        use_sysbuild=0
+    fi
+
+    # 检测构建模式是否变化 (sysbuild ↔ 单应用)
+    if [ -f "${bdir}/build_info.yml" ]; then
+        local old_mode
+        old_mode=$(grep -c sysbuild "${bdir}/build_info.yml" 2>/dev/null || true)
+        if [ "$use_sysbuild" = "1" ] && [ "$old_mode" = "0" ]; then
+            warn "构建模式变化 (单应用→sysbuild), 清理缓存"
+            rm -rf "$bdir"
+        elif [ "$use_sysbuild" = "0" ] && [ "$old_mode" != "0" ]; then
+            warn "构建模式变化 (sysbuild→单应用), 清理缓存"
+            rm -rf "$bdir"
+        fi
+    fi
+
+    mkdir -p "$bdir"
+
+    # overlay
+    local overlay_opt=""
+    local ovf="${dir}/boards/${BOARD//\//_}.overlay"
+    if [ -f "$ovf" ]; then
+        overlay_opt="-DDTC_OVERLAY_FILE=${ovf}"
+        info "overlay: $ovf"
+    fi
+
+    if [ "$use_sysbuild" = "1" ]; then
+        info "模式: sysbuild (MCUboot + $name)"
+        info "SDK: $SDK_DIR"
+        cd "${SDK_DIR}/zephyr"
+        west build --sysbuild -b "$BOARD" "$dir" -d "$bdir" -- $overlay_opt || die "编译失败"
+    else
+        info "模式: 单应用 (仅 $name)"
+        cd "$bdir"
+        cmake -GNinja -DBOARD="$BOARD" -DZEPHYR_BASE="$ZEPHYR_BASE" $overlay_opt "$dir" || die "CMake 配置失败"
+        ninja || die "编译失败"
+    fi
+
     ok "编译成功: $name"
-    local b="${bdir}/zephyr/zephyr.bin"
-    [ -f "$b" ] && echo "  bin: $b ($(du -h "$b" | cut -f1))"
-    grep -A3 "Memory region" "${bdir}/zephyr/zephyr.map" 2>/dev/null
+
+    # 编译完成后自动 revert patch
+    do_patch_revert "$name" "$dir"
+    local merged="${bdir}/merged.hex"
+    if [ -f "$merged" ]; then
+        echo "  烧写: $merged ($(du -h "$merged" | cut -f1))"
+        echo "  烧写命令: ./build.sh $name flash"
+    fi
+    local zip="${bdir}/dfu_application.zip"
+    if [ -f "$zip" ]; then
+        echo "  OTA: $zip ($(du -h "$zip" | cut -f1))"
+    fi
+    # flash usage
+    local zmap
+    zmap=$(find "$bdir" -name "zephyr.map" -path "*/${name}/*" 2>/dev/null | head -1)
+    [ -z "$zmap" ] && zmap=$(find "$bdir" -name "zephyr.map" 2>/dev/null | head -1)
+    if [ -n "$zmap" ]; then
+        grep -A3 "Memory region" "$zmap" 2>/dev/null || true
+    fi
 }
 
 do_flash() {
-    local name="$1" bdir
-    bdir="${SCRIPT_DIR}/build/${name}"
-    [ -f "${bdir}/CMakeCache.txt" ] || die "先编译: ./build.sh $name"
-    cd "$bdir" && west flash --runner jlink
-    ok "烧写: $name"
+    local name="$1"
+    local bdir="${SCRIPT_DIR}/build/${name}"
+    local merged="${bdir}/merged.hex"
+
+    if [ ! -f "$merged" ]; then
+        die "merged.hex 不存在，请先编译: ./build.sh $name"
+    fi
+
+    info "烧写 merged.hex (MCUboot + $name)"
+    info "目标: $merged"
+    flash_hex "$merged"
 }
 
 do_clean() {
@@ -179,56 +284,26 @@ do_clean() {
     rm -rf "${SCRIPT_DIR}/build/$1" && ok "清理: $1"
 }
 
-do_menuconfig() {
-    local name="$1" dir="$2" bdir
-    bdir="${SCRIPT_DIR}/build/${name}"
-    do_patch_apply "$name" "$dir"
-    [ -f "${bdir}/CMakeCache.txt" ] || do_cmake "$name" "$dir"
-    cd "$bdir" && west build -t menuconfig
-}
-
 do_new() {
     local name="$1" dir="${SCRIPT_DIR}/apps/${name}"
     [ -d "$dir" ] && die "已存在: $name"
-    mkdir -p "$dir/src" "$dir/boards" "$dir/patches"
-    # patches README
-    cat > "$dir/patches/README.md" <<'PATCHMD'
-# SDK Patches
+    mkdir -p "$dir/src" "$dir/boards" "$dir/sysbuild" "$dir/patches"
 
-补丁文件放在这里，命名规则: `NNNN-简短描述.patch`
-
-例如: `0001-uart-mcumgr-debug-log.patch`
-
-## 创建补丁
-
-```bash
-cd /home/dengbaowen/linux/rid/ncs/v3.3.1
-git diff > /home/dengbaowen/linux/rid/ncs/v3.3.1-apps/apps/rid0/patches/0001-xxx.patch
-```
-
-如果在非 git 管理的 SDK 上修改了文件：
-
-```bash
-cd /home/dengbaowen/linux/rid/ncs/v3.3.1
-diff -ruN . ~/ncs-orig-backup/ > patches/0001-xxx.patch
-```
-
-## 注意事项
-
-- patch 文件路径相对于 SDK 根目录 (`ncs/v3.3.1/`)
-- 按编号排序 apply，倒序 revert
-- `build.sh` 会自动在 cmake 前 apply，clean 时 revert
-PATCHMD
+    # CMakeLists.txt
     cat > "$dir/CMakeLists.txt" <<CMAKE
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS \$ENV{ZEPHYR_BASE})
 project($name)
 target_sources(app PRIVATE src/main.c)
 CMAKE
+
+    # prj.conf
     cat > "$dir/prj.conf" <<PRJ
 CONFIG_LOG=y
 CONFIG_PRINTK=y
 PRJ
+
+    # main.c
     cat > "$dir/src/main.c" <<MAIN
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -238,7 +313,37 @@ int main(void) {
     return 0;
 }
 MAIN
-    ok "已创建 $name (vim ${dir}/src/main.c)"
+
+    # sysbuild (MCUboot)
+    cat > "$dir/sysbuild/CMakeLists.txt" <<SYSB
+find_package(Sysbuild REQUIRED HINTS \$ENV{ZEPHYR_BASE})
+project(sysbuild LANGUAGES)
+SYSB
+    echo 'SB_CONFIG_BOOTLOADER_MCUBOOT=y' > "$dir/sysbuild.conf"
+
+    # patches README
+    cat > "$dir/patches/README.md" <<'PATCHMD'
+# SDK Patches
+
+补丁文件放在这里，命名规则: `NNNN-简短描述.patch`
+
+制作 patch:
+  cd ~/linux/rid/ncs/v3.3.1
+  cp path/to/file.c /tmp/file.c.orig
+  vim path/to/file.c                              # 改代码
+  diff -u /tmp/file.c.orig path/to/file.c > /tmp/raw.patch
+  sed -i 's|--- /tmp/.*|--- a/path/to/file.c|' /tmp/raw.patch
+  sed -i 's|+++ path/.*|+++ b/path/to/file.c|' /tmp/raw.patch
+  cp /tmp/file.c.orig path/to/file.c              # 恢复 SDK
+  cp /tmp/raw.patch apps/<app>/patches/0001-描述.patch
+
+build.sh 会在编译前自动 apply，clean 时自动 revert。
+PATCHMD
+
+    ok "已创建 $name"
+    echo "  编辑: vim ${dir}/src/main.c"
+    echo "  编译: ./build.sh $name"
+    echo "  烧写: ./build.sh $name flash"
 }
 
 help() {
@@ -247,9 +352,9 @@ help() {
 
 list              列出应用
 new <name>        创建新应用
-<app>             编译
-<app> flash       编译+烧写
-<app> clean       清理
+<app>             编译 (sysbuild 模式, 带 MCUboot)
+<app> flash       编译+烧写 merged.hex
+<app> clean       清理 (自动 revert patch)
 <app> patches     列出 patch
 <app> patch-status 查看 patch 状态
 <app> patch-revert 回退所有 patch
@@ -289,7 +394,6 @@ main() {
                 build|"")     do_build "$app" "$dir" ;;
                 flash)        do_build "$app" "$dir" && do_flash "$app" ;;
                 clean)        do_clean "$app" "$dir" ;;
-                menuconfig)   do_menuconfig "$app" "$dir" ;;
                 patches)      do_patch_list "$dir" ;;
                 patch-status) do_patch_status "$app" "$dir" ;;
                 patch-revert) do_patch_revert "$app" "$dir" ;;
