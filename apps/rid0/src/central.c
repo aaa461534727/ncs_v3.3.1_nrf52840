@@ -258,25 +258,33 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 
     if (ad->len > 0x1E) {
         /* ===== GB 46750-2025 扩展格式 (>31字节) ===== */
-        /* 输出格式: AABB + 原始AD data + CCDD */
-        /* buf 大小 = 2(头) + ad->len + 2(尾)，最大 2+255+2=259 */
-        uint8_t buf[259];
-        uint8_t buf_size = 2 + ad->len + 2;
+        /* 输出格式: AABB + MAC(6B) + GB TLV(直接0xFF开头) + CCDD */
+        /* BLE AD structure 在 C738VR 侧不需要，直接传 TLV 即可 */
+        /* buf 大小 = 2(头) + 6(MAC) + (ad->len - 6) + 2(尾) */
+        /* ad->data 结构: [AD len][0x16][0xFAFF][0x0D][counter][TLV...] */
+        /* 跳过前 6 字节 BLE AD structure，只取 TLV */
+        uint8_t tlv_offset = 6;  /* 跳过 AD len + type + UUID + ODID + counter */
+        if (ad->len <= tlv_offset) return;
+        uint16_t tlv_len = ad->len - tlv_offset;
+        uint8_t buf[265];
+        uint8_t buf_size = 2 + 6 + tlv_len + 2;
 
         buf[0] = 0xAA;
         buf[1] = 0xBB;
-        memcpy(&buf[2], ad->data, ad->len);
-        buf[2 + ad->len]     = 0xCC;
-        buf[2 + ad->len + 1] = 0xDD;
+        memcpy(&buf[2], addr->a.val, 6);   /* MAC 6 字节 */
+        memcpy(&buf[2 + 6], ad->data + tlv_offset, tlv_len);  /* 只传 TLV */
+        buf[2 + 6 + tlv_len]     = 0xCC;
+        buf[2 + 6 + tlv_len + 1] = 0xDD;
 
         UART_WriteData(0, buf, buf_size);
         UART_WriteData(1, buf, buf_size);
 
         /* 打印关键字段用于调试 */
-        uint8_t page_num = ad->data[5];
-        uint8_t version  = ad->data[6];
-        uint8_t gb_len   = ad->data[7];
-        printk("[GB46750] page=%u version=0x%02X gb_len=%u\n", page_num, version, gb_len);
+        uint8_t gb_type  = ad->data[tlv_offset];     /* 0xFF */
+        uint8_t version  = ad->data[tlv_offset + 1]; /* 版本号 */
+        uint8_t gb_len   = ad->data[tlv_offset + 2]; /* 数据长度 */
+        printk("[GB46750] MAC=%s type=0x%02X ver=0x%02X gb_len=%u tlv=%u\n",
+               dev, gb_type, version, gb_len, tlv_len);
 
     } else {
         /* ===== 原有 31 字节 RID 格式 (msg_type 0x0~0x5) ===== */
