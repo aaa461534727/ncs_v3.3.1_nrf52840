@@ -307,19 +307,23 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         memcpy(rid_info.mac, addr->a.val, sizeof(addr->a.val));
         memcpy(msg_ptr, ad->data, 31);
 
-        /* 组装: AABB + MAC(6B) + AD data(31B) + CCDD */
-        for (i = 0; i < sizeof(addr->a.val) + 31 + 2; i++) {
+        /* 组装: AABB + MAC(6B) + encoded_data(25B 跳过 BLE AD structure) + CCDD */
+        /* ad->data = [AD len][0x16][0xFAFF][0x0D][counter][encoded 25B], 共 31B */
+        /* 跳过前 6 字节 BLE AD structure，只传 encoded_data 给 C738VR */
+        uint8_t encoded_offset = 6;
+        uint8_t *encoded = msg_ptr + encoded_offset;
+        for (i = 0; i < sizeof(addr->a.val) + 25 + 2; i++) {
             if (i >= 8) {
-                buf[i] = msg_ptr[i - 8];
+                buf[i] = encoded[i - 8];
             } else {
                 buf[i + 2] = rid_info.mac[i];
             }
         }
-        buf[2 + sizeof(addr->a.val) + 31]     = 0xCC;
-        buf[2 + sizeof(addr->a.val) + 31 + 1] = 0xDD;
+        buf[2 + sizeof(addr->a.val) + 25]     = 0xCC;
+        buf[2 + sizeof(addr->a.val) + 25 + 1] = 0xDD;
 
-        UART_WriteData(0, buf, sizeof(buf));
-        UART_WriteData(1, buf, sizeof(buf));
+        UART_WriteData(0, buf, 2 + 6 + 25 + 2);
+        UART_WriteData(1, buf, 2 + 6 + 25 + 2);
     }
 }
 static int scan_start(void)
