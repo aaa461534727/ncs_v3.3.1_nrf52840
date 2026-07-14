@@ -245,8 +245,8 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     RID rid_info;
     int i;
 
-#if 0
-    /* ===== 测试指标: 每秒广播数量统计 ===== */
+#if 1
+    /* ===== 测试指标: 每秒 BLE 广播包接收数量 ===== */
     {
         static uint32_t adv_count = 0;
         static int64_t last_print_ms = 0;
