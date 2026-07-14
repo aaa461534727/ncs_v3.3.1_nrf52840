@@ -245,6 +245,22 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     RID rid_info;
     int i;
 
+#if 0
+    /* ===== 测试指标: 每秒广播数量统计 ===== */
+    {
+        static uint32_t adv_count = 0;
+        static int64_t last_print_ms = 0;
+        int64_t now_ms = k_uptime_get();
+
+        adv_count++;
+
+        if ((now_ms - last_print_ms) >= 1000) {
+            printk("[ADV-STATS] adv/sec=%u\n", adv_count);
+            adv_count = 0;
+            last_print_ms = now_ms;
+        }
+    }
+#else
     bt_addr_le_to_str(addr, dev, sizeof(dev));
 
     /* RID 数据头部比对 */
@@ -325,7 +341,9 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         UART_WriteData(0, buf, 2 + 6 + 25 + 2);
         UART_WriteData(1, buf, 2 + 6 + 25 + 2);
     }
+#endif
 }
+
 static int scan_start(void)
 {
     /* Use active scanning and disable duplicate filtering to handle any
@@ -392,7 +410,7 @@ int central_scan_adv(void)
     }
 
     printk("Scanning successfully started\n");
-    printk("ota test 5\n");
+    printk("ota test 9\n");
     return 0;
 }
 
